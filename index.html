@@ -5464,6 +5464,13 @@ function aiAscendantEnemy(pid, dt){
   const hearts=G.buildings.filter(b=>!b.dead&&b.owner===pid&&b.type==='heartspire'&&b.progress>=1);
   const wantW=macroMode?6+Math.max(0,hearts.length-1)*2:pers.wantWorkers;
   for(const h of hearts) if(workers.length<wantW&&h.queue.length<3){ trainUnit(h,'acolyte',true); break; }
+  // Bud 2026-10-14: AI researches Harvest upgrades (proactive bug hunt — 6-worker
+  // economy needs the multipliers or AI income collapses).
+  const hs0=hearts.find(b=>!b.research);
+  if(hs0&&G.time>180){
+    for(const hid of ['harv1','harv2','harv3'])
+      if(!hasUpgrade(pid,hid)){ startResearch(hs0,hid); break; }
+  }
   // 2. Idle workers harvest; keep 2 on flux once the geyser is known.
   for(const w of workers){
     if(w.ord.t!=='idle') continue;
@@ -5683,6 +5690,15 @@ function aiThink(pid, dt){
     const cc=ccs[0];
     const wantWorkers=pers.wantWorkers+(st.aggro>=3?2:0);
     if(cc&&workers.length<wantWorkers&&cc.queue.length<2) trainUnit(cc,'pioneer',true);
+  }
+  // Bud 2026-10-14: AI researches Harvest upgrades — with the 6-worker economy,
+  // skipping these would cripple AI income (found by proactive bug hunt).
+  // Race-aware: Concord=command, Swarm=hive (both can research worker upgrades).
+  const baseTypes=G.players[pid]&&G.players[pid].race==='swarm'?['hive']:['command'];
+  const cc0=G.buildings.find(b=>!b.dead&&b.owner===pid&&baseTypes.includes(b.type)&&b.progress>=1&&!b.research);
+  if(cc0&&G.time>180){
+    for(const hid of ['harv1','harv2','harv3'])
+      if(!hasUpgrade(pid,hid)){ startResearch(cc0,hid); break; }
   }
   // Supply: another depot whenever we're close to cap. Hard/ally may queue two
   // so growth never stalls behind one 14-second depot. Never past the 500 cap
