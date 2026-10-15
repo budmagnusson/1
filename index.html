@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>STARFALL COMMAND — Classic AI Pass</title>
-<meta name="starfall-build" content="2026-10-14-bughunt">
+<meta name="starfall-build" content="2026-10-15-wave2-c1">
 <style>
   :root { color-scheme: dark; }
   html, body { margin:0; padding:0; overflow:hidden; background:#03070b; height:100%;
@@ -411,9 +411,19 @@ const MAPS=[
     }
     // Canyon rim plateaus overlooking the bends.
     setPlateau(30,20,50,40); setPlateau(78,88,98,108);
-    // Expansions tucked in the bends.
-    addOreField(40,88,6); addFluxGeyser(44,92);
-    addOreField(84,36,6); addFluxGeyser(80,32);
+    // Bud 2026-10-15 wave2: carve deterministic corridors from each spawn pad to
+    // the canyon path — bases must not depend on rng gaps in the rock walls.
+    for(const s of [{x:14,y:64},{x:110,y:64}]){
+      const wy=64+Math.round(28*Math.sin(s.x*0.09));
+      const y0=Math.min(s.y,wy)-8, y1=Math.max(s.y,wy)+8;
+      for(let y=y0;y<=y1;y++) for(let x=s.x-3;x<=s.x+3;x++){
+        if(inMap(x,y)){ mapTiles[tIdx(x,y)]=0; blocked[tIdx(x,y)]=0; }
+      }
+    }
+    // Expansions tucked in the bends — ON the canyon path (Bud 2026-10-15 wave2:
+    // old coords were entombed in rock, unreachable).
+    addOreField(38,50,6); addFluxGeyser(44,46);
+    addOreField(82,89,6); addFluxGeyser(78,84);
   } },
 { id:'shores', name:'Broken Shores', desc:'Peninsulas and inlets. Watch the water.',
   spawns:[{x:16,y:16},{x:110,y:110}],
