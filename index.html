@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>STARFALL COMMAND — Classic AI Pass</title>
-<meta name="starfall-build" content="2026-10-15-ai-defense">
+<meta name="starfall-build" content="2026-10-15-flux-balance">
 <style>
   :root { color-scheme: dark; }
   html, body { margin:0; padding:0; overflow:hidden; background:#03070b; height:100%;
@@ -1510,7 +1510,7 @@ function startResearch(b,id){
   p.ore-=d.cost.ore; p.flux-=d.cost.flux; b.research=id; b.researchProgress=0; AudioSys.build(); return true;
 }
 function updateProduction(b,dt){
-  if((b.type==='techlab'||b.type==='resovault'||b.type==='command')&&b.progress>=1&&b.research){
+  if((b.type==='techlab'||b.type==='resovault'||b.type==='command'||b.type==='heartspire'||b.type==='hive')&&b.progress>=1&&b.research){
     const d=UPG[b.research]; b.researchProgress=Math.min(1,b.researchProgress+dt/d.time);
     if(b.researchProgress>=1){
       const p=G.players[b.owner]; p.upgrades=p.upgrades||[]; if(!p.upgrades.includes(b.research)) p.upgrades.push(b.research);
