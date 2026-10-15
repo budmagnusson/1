@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>STARFALL COMMAND — Classic AI Pass</title>
-<meta name="starfall-build" content="2026-10-15-wave2-c3">
+<meta name="starfall-build" content="2026-10-15-ai-defense">
 <style>
   :root { color-scheme: dark; }
   html, body { margin:0; padding:0; overflow:hidden; background:#03070b; height:100%;
@@ -28,7 +28,9 @@
 /* ============================================================================
    STARFALL COMMAND — Classic AI Pass (original code, original IP)
    Retains the art pass and adds an explicit hold/defend/counter/assault AI policy.
-   Enemy waves are delayed until 30 in-game minutes unless a raid triggers a counterattack.
+   Enemy waves are delayed until the difficulty time limit (25 hard / 30 normal /
+   35 easy in-game minutes); raids trigger a defense-only rally, never a
+   counter-march. The AI builds static defenses very aggressively all game.
    Core controls, combat, economy, and pathing remain from the supplied build.
    Faction in this prototype: The Concord (humans). Opponent: Concord AI.
    ========================================================================== */
@@ -5455,6 +5457,11 @@ function aiAscendantAlly(pid, dt){
 // WAR_DIFF scaling, AI_PERSONALITY pacing, escalating attack waves at the player.
 function aiAscendantEnemy(pid, dt){
   const st=AI[pid]; if(!st||G.over||!G.running) return;
+  // Bud 2026-10-15: AI thinks run every AI_THINK_INTERVAL_TICKS ticks, so a
+  // per-think timer must advance by game-seconds-per-think, not per-tick dt
+  // (the old (dt||0.5) made every timer below ~30x too slow — waves effectively
+  // never launched).
+  const thinkDt=AI_THINK_INTERVAL_TICKS*(dt||0.5);
   const p=G.players[pid], bp=G.basePos[pid]; if(!bp) return;
   const workers=G.units.filter(u=>!u.dead&&u.owner===pid&&u.def.worker&&!u.loadedBy);
   const army=G.units.filter(u=>!u.dead&&u.owner===pid&&!u.def.worker&&u.def.dmg>0&&!u.loadedBy);
@@ -5465,7 +5472,7 @@ function aiAscendantEnemy(pid, dt){
   const diff=WAR_DIFF[G.warDiff||'normal'];
   const isHard=G.warDiff==='hard';
   // Escalation: same convention as the Concord aiThink (capped — Bud's rule).
-  st.aggroT=(st.aggroT||0)+(dt||0.5);
+  st.aggroT=(st.aggroT||0)+thinkDt;
   if(st.aggroT>=60){ st.aggroT=0;
     if(st.dmgTaken<400){ st.aggro=Math.min(diff.aggroCap,(st.aggro||0)+1); }
     else { st.aggro=Math.max(0,(st.aggro||0)-1); }
@@ -5507,10 +5514,10 @@ function aiAscendantEnemy(pid, dt){
   if(!done('bladesanctum')&&!pending('bladesanctum')&&(G.time>45||workers.length>=6)) at('bladesanctum');
   else if(done('bladesanctum')&&!done('skyreliquary')&&!pending('skyreliquary')) at('skyreliquary');
   else if(done('skyreliquary')&&!done('resovault')&&!pending('resovault')) at('resovault');
-  // Defense: pylons scale like Concord turrets — turtlers fortify hardest,
-  // hard escalates with game time (Bud's defense round, same convention).
-  const wantPy=(st.personality==='turtler'?3:(done('skyreliquary')?2:1))
-    +(macroMode?Math.min(3,Math.floor(Math.max(0,G.time-300)/240)):0);
+  // Defense: pylons scale aggressively for ALL difficulties — turtlers fortify
+  // hardest, everyone keeps building them all game (Bud 2026-10-15 fortress AI).
+  const wantPy=(st.personality==='turtler'?4:(done('skyreliquary')?3:2))
+    +Math.min(6,Math.floor(Math.max(0,G.time-240)/180));
   const nPy=G.buildings.filter(b=>!b.dead&&b.owner===pid&&b.type==='aegispylon').length;
   if(nPy<wantPy&&done('bladesanctum')&&!pending('aegispylon')) at('aegispylon');
   if(G.time>420&&!done('warpconduit')&&!pending('warpconduit')) at('warpconduit');
@@ -5555,8 +5562,9 @@ function aiAscendantEnemy(pid, dt){
   else if(st.counterWatch) st.phase='COUNTER';
   else st.phase=G.time<(st.holdSeconds||AI_OPENING_HOLD_SECONDS)?'HOLD':'ASSAULT';
   aiTryCounterattack(pid,army,ascHomeX,ascHomeY,pers.defenders,ascThreats,false);
-  // 8. Planned attack waves begin after the opening hold (unless a counterattack triggers sooner).
-  st.waveT=(st.waveT===undefined?(st.holdSeconds||AI_OPENING_HOLD_SECONDS):st.waveT)-(dt||0.5);
+  // 8. Planned attack waves begin after the opening hold. Counter-pushes are
+  // defense-only and never launch early attacks.
+  st.waveT=(st.waveT===undefined?(st.holdSeconds||AI_OPENING_HOLD_SECONDS):st.waveT)-thinkDt;
   if(st.waveT<=0){
     st.waveNum=(st.waveNum||0)+1;
     const waveCap=isHard?48:34;
@@ -5594,9 +5602,12 @@ function aiTryCounterattack(pid,army,homeX,homeY,defenderCount,nearbyThreats,isA
   if(ready.length<reserve+3) return false;
   const count=Math.min(8,Math.max(3,Math.floor((ready.length-reserve)*0.5)));
   const group=ready.slice(0,count);
-  const knownBase=scoutedEnemyBases(pid).find(base=>base.owner===hit.owner);
-  const target=knownBase||{x:hit.x,y:hit.y};
-  for(const u of group) orderMove(u,target.x+rand(-80,80),target.y+rand(-80,80),true);
+  // Bud 2026-10-15: counter-push is DEFENSE-ONLY — no outgoing attacks before
+  // the wave timer, even when provoked. The group rallies at a forward
+  // defensive position between home and where the raid came from, and holds.
+  const dx=hit.x-homeX, dy=hit.y-homeY, d=Math.hypot(dx,dy)||1;
+  const holdD=Math.min(d*0.4, 12*TILE);
+  for(const u of group) orderMove(u, homeX+dx/d*holdD+rand(-60,60), homeY+dy/d*holdD+rand(-60,60), true);
   st.counterattackT=G.time; st.threatDamage=0; st.lastAttacker=null; st.phase='COUNTER';
   st.counterWatch={ids:new Set(group.map(u=>u.id)),start:group.length,t:G.time};
   flashHint('⚠ Enemy counterattack!'); AudioSys.error();
@@ -5605,6 +5616,11 @@ function aiTryCounterattack(pid,army,homeX,homeY,defenderCount,nearbyThreats,isA
 function aiThink(pid, dt){
   if(G.over||!G.running) return;
   const st=AI[pid]; if(!st) return;
+  // Bud 2026-10-15: timers below must advance by game-seconds-per-think
+  // (AI_THINK_INTERVAL_TICKS ticks), not per-tick dt — the old (dt||0.5)
+  // made aggro/wave/harass/site timers ~30x too slow, so planned waves
+  // effectively never launched.
+  const thinkDt=AI_THINK_INTERVAL_TICKS*(dt||0.5);
   const p=G.players[pid];
   const workers=G.units.filter(u=>!u.dead&&u.owner===pid&&u.def.worker&&!u.loadedBy);
   const army=G.units.filter(u=>!u.dead&&u.owner===pid&&!u.def.worker&&u.def.dmg>0&&!u.loadedBy);
@@ -5627,7 +5643,7 @@ function aiThink(pid, dt){
   // Escalation: if nobody pressures this AI, it grows bolder (capped — Bud's rule).
   // Damage taken is accumulated in damageEnt. Every 60s of peace: +1 aggro (max 5).
   // Taking heat: aggro drops, so pressuring the AI keeps it in check.
-  st.aggroT+=(dt||0.5);
+  st.aggroT+=thinkDt;
   if(st.aggroT>=60){
     st.aggroT=0;
     if(st.dmgTaken<400){ st.aggro=Math.min(diff.aggroCap,st.aggro+1); }
@@ -5638,7 +5654,7 @@ function aiThink(pid, dt){
   // its own buildings) sat at 0% forever and blocked later builds of that type.
   // Half-built abandoned sites get a worker re-sent; 0%-progress sites idle for
   // ~30s are scrapped (cost refunded, spot remembered as bad) so a new site is chosen.
-  st.siteT=(st.siteT||0)+(dt||0.5);
+  st.siteT=(st.siteT||0)+thinkDt;
   if(st.siteT>=5){ st.siteT=0;
     for(const b of G.buildings){
       if(b.dead||b.owner!==pid||b.progress>=1) continue;
@@ -5693,15 +5709,19 @@ function aiThink(pid, dt){
   if(st.scoutActive&&!G.units.some(u=>u.id===st.scoutActive&&!u.dead)) st.scoutActive=null;
   // Economy: every command center trains pioneers; hard/ally saturate properly
   // (18 workers on one base, +8 per extra base) instead of trickling.
+  // Bud 2026-10-15: race-aware — Swarm trains drones from the hive (the old
+  // command-only filter meant a Swarm AI never replenished workers at all).
+  const aiRace=G.players[pid]&&G.players[pid].race;
+  const aiWorkerType=aiRace==='swarm'?'drone':'pioneer';
   const macroMode=isHard||isAlly;
-  const ccs=G.buildings.filter(b=>!b.dead&&b.owner===pid&&b.type==='command'&&b.progress>=1);
+  const ccs=G.buildings.filter(b=>!b.dead&&b.owner===pid&&(b.type==='command'||b.type==='hive')&&b.progress>=1);
   if(macroMode){
     const wantW=6+Math.max(0,ccs.length-1)*2+(st.aggro>=3?2:0);
-    for(const ccb of ccs) if(workers.length<wantW&&ccb.queue.length<3) trainUnit(ccb,'pioneer',true);
+    for(const ccb of ccs) if(workers.length<wantW&&ccb.queue.length<3) trainUnit(ccb,aiWorkerType,true);
   } else {
     const cc=ccs[0];
     const wantWorkers=pers.wantWorkers+(st.aggro>=3?2:0);
-    if(cc&&workers.length<wantWorkers&&cc.queue.length<2) trainUnit(cc,'pioneer',true);
+    if(cc&&workers.length<wantWorkers&&cc.queue.length<2) trainUnit(cc,aiWorkerType,true);
   }
   // Bud 2026-10-14: AI researches Harvest upgrades — with the 6-worker economy,
   // skipping these would cripple AI income (found by proactive bug hunt).
@@ -5733,29 +5753,32 @@ function aiThink(pid, dt){
   // Static defense FIRST for everyone: 1 turret once the barracks is up (no more
   // naked bases), a 2nd with the factory, turtlers still fortify hardest.
   // This is defense, not aggression — Bud stays able to win.
-  const wantTurret0=st.personality==='turtler'?3:(done('factory')?2:(done('barracks')?1:0));
-  // Difficulty pass 2026-10-11: the ally sits next to an enemy corner and eats
-  // focused aggression — one extra turret so it holds until the player helps.
-  // Defense round, same day (Bud: "the ai has no chance"): fortification scales
-  // with game time for hard/ally — +1 turret per ~3 min after minute 5, up to +5.
-  const fortScale=macroMode?Math.min(5,Math.floor(Math.max(0,G.time-300)/180)):0;
-  const wantTurret=wantTurret0+(isAlly?1:0)+fortScale;
-  const nTurret=G.buildings.filter(b=>!b.dead&&b.owner===pid&&b.type==='turret').length;
-  if(nTurret<wantTurret&&done('barracks')&&!pending('turret')) aiBuild('turret',pid);
-  // Missile turrets: dedicated air cover for hard/ally once the starport is up.
-  // Defense round 2026-10-11: scales with time — 2 base, up to 5 by minute 25.
-  const wantMissile=2+Math.min(3,Math.floor(Math.max(0,G.time-600)/300));
-  const nMissile=G.buildings.filter(b=>!b.dead&&b.owner===pid&&b.type==='missile').length;
-  if(macroMode&&done('starport')&&nMissile<wantMissile&&!pending('missile')) aiBuild('missile',pid);
+  // Bud 2026-10-15: FORTRESS AI — very aggressive static defense for EVERYONE,
+  // all difficulties, all personalities. Turrets go up early and keep coming
+  // all game. Race-aware: Swarm builds spine/spore colonies (its static D),
+  // everyone else builds turrets/missiles/bunkers. (aiRace defined above.)
+  const groundDef=aiRace==='swarm'?'spinecolony':'turret';
+  const airDef=aiRace==='swarm'?'sporecolony':'missile';
+  const wantTurret0=st.personality==='turtler'?4:(done('factory')?3:(done('barracks')?2:0));
+  // Fortification scales with game time for ALL difficulties — +1 per ~2.5 min
+  // after minute 4, up to +8. The AI is a fortress by mid-game, not just on hard.
+  const fortScale=Math.min(8,Math.floor(Math.max(0,G.time-240)/150));
+  const wantTurret=wantTurret0+(isAlly?1:0)+fortScale+(aiRace==='swarm'?2:0); // swarm: colonies stand in for bunkers too
+  const nTurret=G.buildings.filter(b=>!b.dead&&b.owner===pid&&b.type===groundDef).length;
+  if(nTurret<wantTurret&&done('barracks')&&!pending(groundDef)) aiBuild(groundDef,pid);
+  // Air cover for everyone once the barracks is up: 2 base, up to 6 by ~minute 24.
+  const wantAirDef=2+Math.min(4,Math.floor(Math.max(0,G.time-480)/240));
+  const nAirDef=G.buildings.filter(b=>!b.dead&&b.owner===pid&&b.type===airDef).length;
+  const airDefReady=aiRace==='swarm'?done('barracks'):done('starport');
+  if(airDefReady&&nAirDef<wantAirDef&&!pending(airDef)) aiBuild(airDef,pid);
   const nBunker=G.buildings.filter(b=>!b.dead&&b.owner===pid&&b.type==='bunker').length;
   const nRax=G.buildings.filter(b=>!b.dead&&b.owner===pid&&b.type==='barracks').length;
-  if(st.personality==='turtler'&&nBunker<3&&done('barracks')&&!pending('bunker')) aiBuild('bunker',pid);
-  // Hard/ally (any personality) also raise bunkers — fortified bases, not just turtlers.
-  // Defense round 2026-10-11: 2 for everyone on hard/ally, not 1.
-  else if(macroMode&&st.personality!=='turtler'&&nBunker<2&&done('factory')&&!pending('bunker')) aiBuild('bunker',pid);
-  // Defensive wall lines + base ring (Bud 2026-10-11, strengthened same day):
-  // hard/ally fortify from minute ~3.5 — walls up before early pressure lands.
-  if(macroMode&&done('barracks')&&G.time>200) aiFortify(pid);
+  // Bunkers for everyone (Concord only — swarm's colonies cover it above).
+  const wantBunker=st.personality==='turtler'?5:3;
+  if(aiRace!=='swarm'&&nBunker<wantBunker&&done('barracks')&&!pending('bunker')) aiBuild('bunker',pid);
+  // Defensive wall lines + base ring: EVERYONE fortifies from minute ~3.5 —
+  // walls up before early pressure lands, not just hard/ally.
+  if(done('barracks')&&G.time>200) aiFortify(pid);
   // Hard/ally: 2nd barracks once the factory is up (minute ~6), 3rd when banking.
   else if(macroMode){
     if(done('factory')&&nRax<2&&!pending('barracks')) aiBuild('barracks',pid);
@@ -5774,7 +5797,7 @@ function aiThink(pid, dt){
     if(nFac<2&&done('factory')&&!pending('factory')) aiBuild('factory',pid);
     else if(nPort<2&&done('starport')&&!pending('starport')) aiBuild('starport',pid);
     else if(nHeavy<1&&done('heavyfactory')&&!pending('heavyfactory')) aiBuild('heavyfactory',pid);
-    else if(nTurret<8&&done('barracks')&&!pending('turret')) aiBuild('turret',pid);
+    else if(nTurret<10&&done('barracks')&&!pending(groundDef)) aiBuild(groundDef,pid);
   }
   // Army production: EVERY production building trains (a built barracks that
   // never trains is dead weight). Easy/normal keep the legacy single-building
@@ -5864,7 +5887,7 @@ function aiThink(pid, dt){
   // Hard-only worker raids begin after the 30-minute opening hold, then recur slowly.
   // The opening remains defensive unless the player has already attacked.
   if(isHard&&!isAlly&&G.time>=(st.holdSeconds||AI_OPENING_HOLD_SECONDS)){
-    st.harassT=(st.harassT===undefined?200:st.harassT)-(dt||0.5);
+    st.harassT=(st.harassT===undefined?200:st.harassT)-thinkDt;
     if(st.harassT<=0){
       st.harassT=220+rng()*80;
       const raiders=army.filter(u=>!u.dead&&!u.recalled&&
@@ -5914,7 +5937,7 @@ function aiThink(pid, dt){
     const idleArmy=army.filter(u=>u.ord.t==='idle');
     const anchor=threatCore[0]||threats[0];
     if(nTurret>0&&threats.length>idleArmy.length*2&&idleArmy.length){
-      const gun=G.buildings.find(b=>!b.dead&&b.owner===pid&&b.type==='turret'&&b.progress>=1);
+      const gun=G.buildings.find(b=>!b.dead&&b.owner===pid&&b.type===groundDef&&b.progress>=1);
       for(const d of idleArmy.slice(0,pers.defenders)){
         if(gun) orderMove(d, gun.cx+rand(-50,50), gun.cy+rand(-50,50), true);
         else orderAttack(d, anchor);
@@ -5928,11 +5951,12 @@ function aiThink(pid, dt){
         orderMove(df, sx+rand(-50,50), sy+rand(-50,50), true);
     }
   }
-  // After a real raid is repelled, send a limited, regrouped counterforce before the 30-minute wave phase.
+  // After a real raid is repelled, rally a limited regrouped counterforce at a
+  // forward defensive position (defense-only — never marches on the enemy).
   aiTryCounterattack(pid,army,homeX,homeY,pers.defenders,threats,isAlly);
   // 3) Wounded defenders fall back to the turret line instead of dying alone
   //    in the open (only near home — never yoinks attackers across the map).
-  const gunLine=G.buildings.find(b=>!b.dead&&b.owner===pid&&b.type==='turret'&&b.progress>=1);
+  const gunLine=G.buildings.find(b=>!b.dead&&b.owner===pid&&b.type===groundDef&&b.progress>=1);
   if(gunLine){
     for(const u of army){
       if(u.dead||u.def.worker||u.def.dmg<=0||u.recalled) continue;
@@ -5961,7 +5985,7 @@ function aiThink(pid, dt){
       for(const h of helpers) orderMove(h, pb.x*TILE+rand(-90,90), pb.y*TILE+rand(-90,90), true);
     }
     // Ally initiative: call for help when its own base is under real pressure.
-    st.allyAskT=(st.allyAskT||0)-(dt||0.5);
+    st.allyAskT=(st.allyAskT||0)-thinkDt;
     if(st.allyAskT<=0&&threatsNearBase(pid)>=4){
       st.allyAskT=150;
       allyCmdLog('Ally: I need help defending my base! 🆘');
@@ -5981,7 +6005,7 @@ function aiThink(pid, dt){
     } else if(alive===0||G.time-rw.t>150) st.retreatWatch=null;
   }
   // Planned attack waves start after the 30-minute hold and target the nearest known enemy base.
-  st.waveT-=(dt||0.5)*attackUrgency;
+  st.waveT-=thinkDt*attackUrgency;
   if(st.waveT<=0){
     st.waveNum++;
     const waveCap=isHard?48:34; // hard fields real armies late; others unchanged
