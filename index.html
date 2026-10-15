@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>STARFALL COMMAND — Classic AI Pass</title>
-<meta name="starfall-build" content="2026-10-15-scvc-feedback">
+<meta name="starfall-build" content="2026-10-15-ally-anchor">
 <style>
   :root { color-scheme: dark; }
   html, body { margin:0; padding:0; overflow:hidden; background:#03070b; height:100%;
@@ -5189,9 +5189,33 @@ function aiPlacementValid(btype,btx,bty,pid){
 // at the player's base instead of its own start — one big combined base.
 // Enemies are never redirected (team check); falls back to own base if the
 // player's base position is gone.
+// Bud 2026-10-15: anchor BESIDE the player's base, not on top of it. The old
+// code used the raw base position, so the ally's first buildings landed ~5
+// tiles from the player's Command Center and boxed in the player's SCVs.
 function aiBuildAnchor(pid){
   if(G.buildWithMe&&pid!==PID&&(G.team[pid]||0)===0){
-    const pb=G.basePos[PID]; if(pb) return pb;
+    const pb=G.basePos[PID]; if(pb){
+      if(!G.buildWithMeAnchor||G.buildWithMeAnchor.pid!==pid){
+        const cc=G.buildings.find(b=>!b.dead&&b.owner===PID&&(b.type==='command'||b.type==='hive'||b.type==='heartspire'));
+        const cx=cc?cc.btx:pb.x, cy=cc?cc.bty:pb.y;
+        // Probe 8 directions at 14 tiles; settle where the land is most open
+        // (dodges the player's resource lines and existing buildings).
+        let best=null,bestScore=-1;
+        for(let k=0;k<8;k++){
+          const th=k/8*Math.PI*2, ax=Math.round(cx+Math.cos(th)*14), ay=Math.round(cy+Math.sin(th)*14);
+          if(ax<5||ay<5||ax>MAP_W-5||ay>MAP_H-5) continue;
+          let score=0;
+          for(let dy=-4;dy<=4;dy++)for(let dx=-4;dx<=4;dx++){
+            const tx=ax+dx,ty=ay+dy,i=ty*MAP_W+tx;
+            if(tx>=0&&ty>=0&&tx<MAP_W&&ty<MAP_H&&mapTiles[i]===0&&!blocked[i]) score++;
+          }
+          // Prefer directions away from the map center scrum (allies expand outward)
+          if(score>bestScore){bestScore=score;best={x:ax,y:ay};}
+        }
+        G.buildWithMeAnchor={pid,x:best?best.x:pb.x+14,y:best?best.y:pb.y};
+      }
+      return G.buildWithMeAnchor;
+    }
   }
   return G.basePos[pid];
 }
@@ -7097,6 +7121,7 @@ function resetState(){
   G.bLost=0; G.uLost=0; G.uKilled=0; G.resultRecorded=false; G.newMedals=[]; // W/L + medals per-game stats
   G.allyCmd={open:false, log:[]}; // Bud's ally command buttons (war 2v2)
   G.buildWithMe=false; // Bud 2026-10-11: "Build With Me" — ally anchors construction at the player's base
+  G.buildWithMeAnchor=null; // Bud 2026-10-15: cached offset anchor so the ally builds BESIDE the player's base
   G.playerRace='concord'; // Ascendant Phase 1: debug hook ?race=ascendant (race-select screen later)
   G.m=null; G.mIdx=-1; G.objectiveText=''; G.mselIdx=0;
   G.players=[
