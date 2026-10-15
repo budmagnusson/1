@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>STARFALL COMMAND — Classic AI Pass</title>
-<meta name="starfall-build" content="2026-10-15-wave2-c1">
+<meta name="starfall-build" content="2026-10-15-wave2-c3">
 <style>
   :root { color-scheme: dark; }
   html, body { margin:0; padding:0; overflow:hidden; background:#03070b; height:100%;
@@ -5719,7 +5719,11 @@ function aiThink(pid, dt){
   if(p.supplyCap<500&&p.supplyUsed>=p.supplyCap-2&&((macroMode&&nDepotPending<2)||(!macroMode&&!pending('depot'))))
     aiBuild('depot',pid);
   // Tech path: finish each step before starting the next (workers aren't yanked).
-  if(done('depot')&&!done('barracks')&&!pending('barracks')) aiBuild('barracks',pid);
+  // Bud 2026-10-15 wave2: with the 6-worker economy, supply pressure never fires,
+  // so the AI would sit on 50k ore building nothing — force the depot when
+  // banking so tech can progress.
+  if(!done('depot')&&!pending('depot')&&p.ore>350) aiBuild('depot',pid);
+  else if(done('depot')&&!done('barracks')&&!pending('barracks')) aiBuild('barracks',pid);
   else if(done('barracks')&&!done('factory')&&!pending('factory')) aiBuild('factory',pid);
   else if(done('factory')&&!done('starport')&&!pending('starport')) aiBuild('starport',pid);
   // Heavy factory: hard/ally tech on a timeline (minute 9 after the starport);
