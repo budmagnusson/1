@@ -2716,6 +2716,8 @@ function buildMinimapTerrain(){
     if(t===1) col=skin.map.rock; else if(t===2) col=[59,190,231]; else if(t===3) col=[190,117,255];
     else if(t===4) col=skin.map.water; else if(t===5) col=skin.map.forest;
     else { const s=(shade[i]%4-1.5)*4; col=skin.map.ground.map(v=>clamp(v+s,0,255)); }
+    // Bud 2026-10-14: elevation shows on minimap (lighten raised plateaus).
+    if(elev[i]===1){ col=col.map(v=>clamp(v+28,0,255)); }
     d[o]=col[0]; d[o+1]=col[1]; d[o+2]=col[2]; d[o+3]=255;
   }
   c.putImageData(img,0,0);
