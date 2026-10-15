@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>STARFALL COMMAND — Classic AI Pass</title>
-<meta name="starfall-build" content="2026-10-15-flux-balance">
+<meta name="starfall-build" content="2026-10-15-scvc-feedback">
 <style>
   :root { color-scheme: dark; }
   html, body { margin:0; padding:0; overflow:hidden; background:#03070b; height:100%;
@@ -2352,7 +2352,14 @@ function getCommands(){
         if(d.race==='ascendant'&&lab.type!=='resovault') continue;
         if(!d.race&&lab.type!=='techlab') continue;
         if(hasUpgrade(PID,id)||(d.req&&!hasUpgrade(PID,d.req))) continue;
-        push('upg_'+id,d.name,d.hotkey,`${d.name}${d.desc?' ('+d.desc+')':''} — ${d.cost.ore} ore ${d.cost.flux} flux, ${d.time}s`,()=>{ if(!startResearch(lab,id)){ AudioSys.error(); flashHint('Not enough resources'); } });
+        push('upg_'+id,d.name,d.hotkey,`${d.name}${d.desc?' ('+d.desc+')':''} — ${d.cost.ore} ore ${d.cost.flux} flux, ${d.time}s`,()=>{
+          if(!startResearch(lab,id)){
+            AudioSys.error();
+            const p=G.players[PID];
+            const needO=Math.max(0,d.cost.ore-(p?p.ore:0)), needF=Math.max(0,d.cost.flux-(p?p.flux:0));
+            flashHint((needO||needF)?`Need ${needO} more ore and ${needF} more flux`:'Cannot start research right now');
+          }
+        });
       }
     }
   }
@@ -2370,12 +2377,25 @@ function getCommands(){
   if(bs.length===1&&bs[0].owner===PID&&(bs[0].type==='command'||bs[0].type==='heartspire'||bs[0].type==='hive')&&bs[0].progress>=1){
     if(bs[0].type==='command'&&G.playerRace!=='ascendant'){ push('liftoff','Lift\nOff 🚀','L','Lift off: this Command Center becomes a slow flying unit. Move it, then land it somewhere new with the Land button.',()=>liftOffCC(bs[0])); }
     // Bud 2026-10-12: worker upgrades at Command Center from the start.
+    // Bud 2026-10-15: accurate feedback — the old "Not enough resources" lied
+    // when the real problem was research already in progress or a flux shortfall.
     const cc=bs[0];
+    const resProg=()=>Math.floor((cc.researchProgress||0)*100);
+    if(cc.research&&UPG[cc.research]){
+      const rd=UPG[cc.research];
+      push('upg_prog',rd.name+'\n'+resProg()+'%','',`${rd.name} research in progress — ${resProg()}% complete. Other upgrades wait until it finishes.`,()=>{ flashHint(rd.name+' research at '+resProg()+'%'); });
+    }
     for(const id of ['harv1','harv2','harv3','constr']){
       const d=UPG[id];
-      if(hasUpgrade(PID,id)||(d.req&&!hasUpgrade(PID,d.req))) continue;
+      if(hasUpgrade(PID,id)||(d.req&&!hasUpgrade(PID,d.req))||cc.research===id) continue;
       push('upg_'+id,d.name,d.hotkey,`${d.name}${d.desc?' ('+d.desc+')':''} — ${d.cost.ore} ore ${d.cost.flux} flux, ${d.time}s`,()=>{
-        if(!startResearch(cc,id)){ AudioSys.error(); flashHint('Not enough resources'); }
+        if(cc.research){ const rd2=UPG[cc.research]; AudioSys.error(); flashHint('Already researching '+rd2.name+' ('+resProg()+'%) — wait for it to finish'); return; }
+        if(!startResearch(cc,id)){
+          AudioSys.error();
+          const p=G.players[PID];
+          const needO=Math.max(0,d.cost.ore-(p?p.ore:0)), needF=Math.max(0,d.cost.flux-(p?p.flux:0));
+          flashHint((needO||needF)?`Need ${needO} more ore and ${needF} more flux`:'Cannot start research right now');
+        }
       });
     }
   }
