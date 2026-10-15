@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>STARFALL COMMAND — Classic AI Pass</title>
-<meta name="starfall-build" content="2026-10-15-ally-anchor">
+<meta name="starfall-build" content="2026-10-15-war-fixes">
 <style>
   :root { color-scheme: dark; }
   html, body { margin:0; padding:0; overflow:hidden; background:#03070b; height:100%;
@@ -5295,6 +5295,17 @@ function aiBuildAt(btype,pid,tx,ty){
   }
   return false;
 }
+// Bud 2026-10-15: defensive rebuild pacing. The fortress AI replaced a killed
+// turret/pylon on the very next think tick, so from Bud's side defenses looked
+// like they "respawned" — kills never stuck. One defensive structure per 45s
+// per AI: the fortress still grows to full strength, but every kill buys a
+// real window. Call only when the build is otherwise allowed; it stamps the
+// cooldown only when it returns true.
+function defBuildReady(st){
+  if(st.lastDefBuild===undefined) st.lastDefBuild=-45; // first defense builds immediately
+  if((G.time-st.lastDefBuild)>=45){ st.lastDefBuild=G.time; return true; }
+  return false;
+}
 // Defensive fortification (Bud 2026-10-11; strengthened same day after his
 // "the ai has no chance" playtest verdict): hard/ally AI builds REAL defensive
 // bases. Walls ring the main base on the enemy-facing side AND run a line
@@ -5461,7 +5472,7 @@ function aiAscendantAlly(pid, dt){
   else if(done('bladesanctum')&&!done('skyreliquary')&&!pending('skyreliquary')) at('skyreliquary');
   else if(done('skyreliquary')&&!done('resovault')&&!pending('resovault')) at('resovault');
   const nPy=G.buildings.filter(b=>!b.dead&&b.owner===pid&&b.type==='aegispylon').length;
-  if(nPy<2&&done('bladesanctum')&&!pending('aegispylon')) at('aegispylon');
+  if(nPy<2&&done('bladesanctum')&&!pending('aegispylon')&&defBuildReady(st)) at('aegispylon');
   if(G.time>420&&!done('warpconduit')&&!pending('warpconduit')) at('warpconduit');
   // Second sanctum when banking (more army).
   const nSanc=G.buildings.filter(b=>!b.dead&&b.owner===pid&&b.type==='bladesanctum').length;
@@ -5563,7 +5574,7 @@ function aiAscendantEnemy(pid, dt){
   const wantPy=(st.personality==='turtler'?4:(done('skyreliquary')?3:2))
     +Math.min(6,Math.floor(Math.max(0,G.time-240)/180));
   const nPy=G.buildings.filter(b=>!b.dead&&b.owner===pid&&b.type==='aegispylon').length;
-  if(nPy<wantPy&&done('bladesanctum')&&!pending('aegispylon')) at('aegispylon');
+  if(nPy<wantPy&&done('bladesanctum')&&!pending('aegispylon')&&defBuildReady(st)) at('aegispylon');
   if(G.time>420&&!done('warpconduit')&&!pending('warpconduit')) at('warpconduit');
   // Second sanctum when banking (more army throughput).
   const nSanc=G.buildings.filter(b=>!b.dead&&b.owner===pid&&b.type==='bladesanctum').length;
@@ -5809,17 +5820,17 @@ function aiThink(pid, dt){
   const fortScale=Math.min(8,Math.floor(Math.max(0,G.time-240)/150));
   const wantTurret=wantTurret0+(isAlly?1:0)+fortScale+(aiRace==='swarm'?2:0); // swarm: colonies stand in for bunkers too
   const nTurret=G.buildings.filter(b=>!b.dead&&b.owner===pid&&b.type===groundDef).length;
-  if(nTurret<wantTurret&&done('barracks')&&!pending(groundDef)) aiBuild(groundDef,pid);
+  if(nTurret<wantTurret&&done('barracks')&&!pending(groundDef)&&defBuildReady(st)) aiBuild(groundDef,pid);
   // Air cover for everyone once the barracks is up: 2 base, up to 6 by ~minute 24.
   const wantAirDef=2+Math.min(4,Math.floor(Math.max(0,G.time-480)/240));
   const nAirDef=G.buildings.filter(b=>!b.dead&&b.owner===pid&&b.type===airDef).length;
   const airDefReady=aiRace==='swarm'?done('barracks'):done('starport');
-  if(airDefReady&&nAirDef<wantAirDef&&!pending(airDef)) aiBuild(airDef,pid);
+  if(airDefReady&&nAirDef<wantAirDef&&!pending(airDef)&&defBuildReady(st)) aiBuild(airDef,pid);
   const nBunker=G.buildings.filter(b=>!b.dead&&b.owner===pid&&b.type==='bunker').length;
   const nRax=G.buildings.filter(b=>!b.dead&&b.owner===pid&&b.type==='barracks').length;
   // Bunkers for everyone (Concord only — swarm's colonies cover it above).
   const wantBunker=st.personality==='turtler'?5:3;
-  if(aiRace!=='swarm'&&nBunker<wantBunker&&done('barracks')&&!pending('bunker')) aiBuild('bunker',pid);
+  if(aiRace!=='swarm'&&nBunker<wantBunker&&done('barracks')&&!pending('bunker')&&defBuildReady(st)) aiBuild('bunker',pid);
   // Defensive wall lines + base ring: EVERYONE fortifies from minute ~3.5 —
   // walls up before early pressure lands, not just hard/ally.
   if(done('barracks')&&G.time>200) aiFortify(pid);
@@ -5870,7 +5881,18 @@ function aiThink(pid, dt){
   for(const b of heavyUse) if(b.queue.length<2) trainUnit(b,'siegetank',true);
   for(const b of [...raxUse,...facUse,...portUse,...heavyUse]) b.rally=st.staging;
   // Fortifications fight: turtlers AND hard/ally AI garrison idle infantry in bunkers.
-  if(st.personality==='turtler'||macroMode){
+  // Bud 2026-10-15: the ALLY only garrisons while its base is actually under
+  // attack. Garrisoning 24/7 left it with "no troops" for waves and joint
+  // attacks — its whole army sat inside bunkers doing nothing.
+  const garrisonOK=st.personality==='turtler'||(macroMode&&(!isAlly||st.baseAlarm));
+  // Bud 2026-10-15: when the ally's alarm clears, empty the bunkers so its
+  // troops are actually available for waves and joint attacks.
+  if(isAlly&&pid!==PID&&!st.baseAlarm){
+    for(const bk of G.buildings){
+      if(!bk.dead&&bk.owner===pid&&bk.type==='bunker'&&bk.cargo&&bk.cargo.length) unloadBunker(bk);
+    }
+  }
+  if(garrisonOK){
     for(const bunker of G.buildings.filter(b=>!b.dead&&b.owner===pid&&b.type==='bunker'&&b.progress>=1&&b.cargo.length<b.def.capacity)){
       const guards=army.filter(u=>!u.loadedBy&&u.ord.t==='idle'&&INFANTRY_TYPES.has(u.type));
       for(const guard of guards){ if(!garrisonBunker(bunker,guard)||bunker.cargo.length>=bunker.def.capacity) break; }
@@ -6890,10 +6912,29 @@ function allyCmdIHelp(){
   allyCmdLog('Ally: Thanks, Marshal! Together we hold!');
   flashHint(us.length+' of your units moving to aid your ally'); AudioSys.order();
 }
-function allyCmdAttackDir(dir,label){
-  const tgt=enemyBaseInDir(dir);
-  if(!tgt){ flashHint('No enemy base '+dir+' of us'); AudioSys.error(); return; }
-  const bp=G.basePos[tgt.id], tx=bp.x*TILE, ty=bp.y*TILE;
+// Bud 2026-10-15: attack orders now name the actual enemy (was: vague
+// "attack top/left/right" directions that were hard to aim). Buttons are
+// built live so dead enemies drop off the menu.
+function allyFoesAlive(){
+  return G.players.filter(pl=>pl.isAI&&isEnemy(pl.id,PID)&&G.buildings.some(b=>!b.dead&&b.owner===pl.id));
+}
+function allyFoeLabel(pl){
+  const st=AI[pl.id];
+  return '⚔️ '+(pl.name||'Enemy')+(st&&st.personality?' ('+st.personality+')':'');
+}
+function allyCmdAttackFoe(eid){
+  const tgt=G.players.find(p=>p.id===eid);
+  if(!tgt||!G.buildings.some(b=>!b.dead&&b.owner===eid)){ flashHint('That enemy is already destroyed'); AudioSys.error(); return; }
+  const bp=G.basePos[eid];
+  // Aim at their base if known, else at their nearest known building.
+  let tx,ty;
+  if(bp){ tx=bp.x*TILE; ty=bp.y*TILE; }
+  else{
+    const b=G.buildings.find(b=>!b.dead&&b.owner===eid);
+    if(!b){ flashHint('No target found'); AudioSys.error(); return; }
+    tx=b.cx; ty=b.cy;
+  }
+  const label=allyFoeLabel(tgt);
   // Bud's units: selected combat units, else up to 10 idle combat units.
   let mine=selUnits().filter(u=>u.def.dmg>0&&!u.def.worker&&!u.loadedBy);
   if(!mine.length) mine=allyCombatUnits(PID,true).slice(0,10);
@@ -6901,6 +6942,11 @@ function allyCmdAttackDir(dir,label){
   // Ally commits its army too.
   const a=warAlly();
   if(allyAlive(a)){
+    // Bud 2026-10-15: the ally garrisons idle infantry in bunkers, so without
+    // this a coordinated attack found "no troops" — unload first, then muster.
+    for(const bk of G.buildings){
+      if(!bk.dead&&bk.owner===a.id&&bk.type==='bunker'&&bk.cargo&&bk.cargo.length) unloadBunker(bk);
+    }
     const army=G.units.filter(u=>!u.dead&&u.owner===a.id&&u.def.dmg>0&&!u.def.worker&&!u.loadedBy&&(u.ord.t==='idle'||u.ord.t==='attackmove'));
     for(const u of army.slice(0,14)) orderMove(u, tx+rand(-140,140), ty+rand(-140,140), true);
     if(AI[a.id]) AI[a.id].chatCmd=null;
@@ -6912,6 +6958,16 @@ function allyCmdAttackDir(dir,label){
 function allyCmdBuildWithMe(){
   const a=warAlly(); if(!allyAlive(a)){ flashHint('Your ally has fallen'); AudioSys.error(); return; }
   G.buildWithMe=!G.buildWithMe;
+  // Bud 2026-10-15: when the ally moves construction to the player's base,
+  // send a few of its workers to live there. Without this every building
+  // waited on one worker trekking across the whole map, so the ally barely
+  // built anything.
+  if(G.buildWithMe){
+    G.buildWithMeAnchor=null; // force a fresh anchor pick
+    const anchor=aiBuildAnchor(a.id);
+    const workers=G.units.filter(u=>!u.dead&&u.owner===a.id&&u.def.worker&&!u.loadedBy).slice(0,4);
+    for(const w of workers) orderMove(w, anchor.x*TILE+rand(-60,60), anchor.y*TILE+rand(-60,60), true);
+  }
   allyCmdLog('You ordered: '+(G.buildWithMe?'Build With Me 🏗️':'Build Apart 🏗️'));
   allyCmdLog(G.buildWithMe?'Ally: Moving construction to your base, Marshal!':'Ally: Back to my own base, Marshal.');
   flashHint(G.buildWithMe?'Ally will build at YOUR base':'Ally building at its own base'); AudioSys.order();
@@ -6921,24 +6977,25 @@ function runAllyCmd(id){
   if(id==='help') allyCmdSendHelp();
   else if(id==='ihelp') allyCmdIHelp();
   else if(id==='buildwithme') allyCmdBuildWithMe();
-  else if(id==='atk_top') allyCmdAttackDir('top','Attack Top Base ⬆️');
-  else if(id==='atk_left') allyCmdAttackDir('left','Attack Left Base ⬅️');
-  else if(id==='atk_right') allyCmdAttackDir('right','Attack Right Base ➡️');
-  else if(id==='atk_mid') allyCmdAttackDir('mid','Attack Mid Base 🎯');
+  else if(id.startsWith('atk_foe_')) allyCmdAttackFoe(parseInt(id.slice(8),10));
 }
 const ALLY_CMDS=[
   {id:'help', label:'Send Help 🆘'},
   {id:'ihelp', label:"I'll Help You 🤝"},
   {id:'buildwithme', label:'Build With Me 🏗️'}, // Bud 2026-10-11: toggle — label flips with state in renderAllyCmd
-  {id:'atk_top', label:'Attack Top Base ⬆️'},
-  {id:'atk_left', label:'Attack Left Base ⬅️'},
-  {id:'atk_right', label:'Attack Right Base ➡️'},
-  {id:'atk_mid', label:'Attack Mid Base 🎯'},
+  // Bud 2026-10-15: attack buttons are per-enemy, built live by allyMenuCmds()
+  // (was: vague Attack Top/Left/Right/Mid directions).
 ];
+function allyMenuCmds(){
+  const cmds=ALLY_CMDS.slice();
+  for(const foe of allyFoesAlive()) cmds.push({id:'atk_foe_'+foe.id, label:allyFoeLabel(foe)});
+  return cmds;
+}
 function allyBtnRect(){ return {x:VW-86, y:116, w:76, h:48}; }
 function allyPanelRect(){
+  const n=allyMenuCmds().length;
   const w=Math.min(300,VW-24), btnH=44, gap=5, logH=3*16+10;
-  const h=ALLY_CMDS.length*(btnH+gap)+logH+12;
+  const h=n*(btnH+gap)+logH+12;
   const y=Math.max(8,Math.min(170,VH-h-232)); // keep clear of the bottom-right minimap
   return {x:VW-w-12, y, w, h, btnH, gap, logH};
 }
@@ -6958,7 +7015,7 @@ function renderAllyCmd(){
   ctx.strokeStyle='#2fff9a'; ctx.lineWidth=2; ctx.stroke();
   let y=p.y+8;
   ctx.textAlign='center';
-  for(const c of ALLY_CMDS){
+  for(const c of allyMenuCmds()){
     const hb=mouse.x>=p.x+8&&mouse.x<=p.x+p.w-8&&mouse.y>=y&&mouse.y<=y+p.btnH;
     ctx.fillStyle=hb?'rgba(47,255,154,0.28)':'rgba(30,52,74,0.95)';
     rr(p.x+8,y,p.w-16,p.btnH,8); ctx.fill();
